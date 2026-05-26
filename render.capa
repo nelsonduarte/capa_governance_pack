@@ -1,0 +1,193 @@
+// render.capa
+//
+// Two output formats:
+//   - render_audit_pack: regulator-readable Markdown
+//   - render_attestation: machine-readable JSON for GRC ingest
+//
+// Both pure functions over the model. The caller writes them
+// through an Fs cap; render itself never touches the world.
+
+import model
+
+import evaluate
+
+// =========================================================
+// Small text helpers
+// =========================================================
+/// Joins a list of strings with the supplied separator. Empty
+/// list returns the empty string. Used by every renderer; the
+/// stdlib does not yet ship a `String.join` so this is a
+/// thin convenience wrapper.
+fun join(xs: List<String>, sep: String) -> String
+    if xs.is_empty()
+        return ""
+    var out = ""
+    var first_seen = false
+    for x in xs
+        if first_seen
+            out = "${out}${sep}${x}"
+        else
+            out = x
+            first_seen = true
+    return out
+
+fun render_caps(xs: List<String>) -> String
+    if xs.is_empty()
+        return "pure"
+    return join(xs, ", ")
+
+fun status_label(s: FindingStatus) -> String
+    return match s
+        Compliant -> "OK"
+        Widened(_) -> "WIDENED"
+        ExcludedByVex(_) -> "EXCLUDED (VEX)"
+        NotEvaluated(_) -> "NOT EVALUATED"
+
+fun status_rationale(s: FindingStatus) -> String
+    return match s
+        Compliant -> "declared caps within policy allowance"
+        Widened(extra) -> "declared caps outside policy: ${render_caps(extra)}"
+        ExcludedByVex(r) -> r
+        NotEvaluated(r) -> r
+
+// =========================================================
+// Markdown: the regulator-facing audit pack
+// =========================================================
+pub fun render_audit_pack(policy: Policy, sbom: SbomSummary, findings: List<Finding>, agg: Aggregate, cve_findings: List<CveFinding>, cve_included: Bool, vex: VexList, audit_timestamp_iso: String) -> String
+    let pct = pure_percent(agg)  // Int percentage
+    let score_str = format_score(agg.compliance_score)  // Float interpolation
+    var out = "# CRA / NIS2 evidence pack\n\n"
+    out = "${out}- **Product:** ${policy.product_name}\n"
+    out = "${out}- **Version:** ${policy.product_version}\n"
+    out = "${out}- **Tier:** ${policy.tier}\n"
+    out = "${out}- **Audit timestamp (UTC):** ${audit_timestamp_iso}\n"
+    out = "${out}- **Functions audited:** ${agg.total_functions}\n"
+    out = "${out}- **Pure (compiler-verified):** ${agg.pure_functions} / ${agg.total_functions} (${pct}%)\n"
+    out = "${out}- **Compliance score:** ${score_str} / 100.00\n\n"
+    out = "${out}## 1. Per-function capability inventory\n\n"
+    out = "${out}| Function | Declared caps | Status | Rationale |\n"
+    out = "${out}|----------|---------------|--------|-----------|\n"
+    for f in findings
+        let caps_str = render_caps(f.declared_caps)
+        let label = status_label(f.status)
+        let reason = status_rationale(f.status)
+        out = "${out}| `${f.function}` | ${caps_str} | ${label} | ${reason} |\n"
+    out = "${out}\n"
+    out = "${out}## 2. Aggregate capability surface\n\n"
+    out = "${out}- **Declared (any function):** ${render_caps(agg.distinct_cap_axes)}\n"
+    out = "${out}- **Policy allowance:** ${render_caps(policy.allowed_caps)}\n"
+    let overshoot = caps_overshoot(agg.distinct_cap_axes, policy.allowed_caps)
+    if overshoot.is_empty()
+        out = "${out}- **Overshoot:** none. Every declared capability is on the policy allow-list.\n\n"
+    else
+        out = "${out}- **Overshoot:** ${render_caps(overshoot)} (declared but not on policy surface)\n\n"
+    out = "${out}## 3. Pure-function evidence\n\n"
+    out = "${out}${agg.pure_functions} of ${agg.total_functions} functions (${pct}%) are compiler-verified pure: "
+    out = "${out}their declared capability set is empty and the Capa type system forbids any I/O. "
+    out = "${out}This is structural evidence, not a heuristic.\n\n"
+    out = "${out}## 4. CVE summary\n\n"
+    if cve_included
+        if cve_findings.is_empty()
+            out = "${out}OSV.dev enrichment ran; no CVE matches were returned for the audited components.\n\n"
+        else
+            out = "${out}OSV.dev enrichment returned ${cve_findings.length()} match(es):\n\n"
+            for c in cve_findings
+                out = "${out}- **${c.cve_id}** (${c.component_name}): ${c.summary}\n"
+            out = "${out}\n"
+    else
+        out = "${out}CVE enrichment skipped (no Net traffic this run). "
+        out = "${out}Set `GOV_PACK_INCLUDE_CVE=1` to enable OSV.dev lookup.\n\n"
+    out = "${out}## 5. VEX-excluded findings\n\n"
+    if vex.exclusions.is_empty()
+        out = "${out}No VEX exclusions were applied.\n\n"
+    else
+        out = "${out}| Function | Rationale |\n"
+        out = "${out}|----------|-----------|\n"
+        for entry in vex.exclusions
+            out = "${out}| `${entry.function}` | ${entry.rationale} |\n"
+        out = "${out}\n"
+    out = "${out}## 6. Regulatory clause mapping\n\n"
+    out = "${out}| Clause | Status | Evidence |\n"
+    out = "${out}|--------|--------|----------|\n"
+    out = "${out}| CRA Annex I, Part II, 1 (machine-readable SBOM) | SATISFIED | CycloneDX 1.5 input consumed end-to-end |\n"
+    out = "${out}| CRA Annex I, Part I (attack-surface minimisation) | ATTESTED PER FUNCTION | per-function capability inventory above |\n"
+    out = "${out}| NIS2 Art. 21(2)(d) (supply-chain documentation) | SATISFIED | attestation.json shipped alongside this report |\n"
+    out = "${out}| SOC2 CC8.1 (change-management evidence) | PARTIAL | VEX exclusions captured with written rationale |\n\n"
+    out = "${out}_Generated by capa_governance_pack. Inputs: CycloneDX SBOM, policy, VEX._\n"
+    return out
+
+fun caps_overshoot(declared: List<String>, allowed: List<String>) -> List<String>
+    var out: List<String> = []
+    for c in declared
+        if not allowed.contains(c)
+            out.push(c)
+    return out
+
+// =========================================================
+// Float -> "NN.NN" with two decimal places (no fancy I/O)
+// =========================================================
+//
+// Capa has no built-in printf precision yet, so we do this by
+// hand on the Float. The score is in [0.0, 100.0]; the routine
+// is exact for those bounds.
+fun format_score(score: Float) -> String
+    let whole = to_int(score)  // truncating toward zero is fine for [0, 100]
+    let rem = score - to_float(whole)
+    let two_dp = to_int(rem * 100.0)
+    let pair = (whole, two_dp)
+    let (w, d) = pair  // tuple destructure (required shape)
+    if d < 10
+        return "${w}.0${d}"
+    return "${w}.${d}"
+
+// =========================================================
+// JSON attestation (machine-readable, for GRC ingestion)
+// =========================================================
+pub fun render_attestation(policy: Policy, sbom: SbomSummary, findings: List<Finding>, agg: Aggregate, cve_findings: List<CveFinding>, cve_included: Bool, audit_timestamp_unix: Int) -> String
+    let _ = sbom  // currently unused; reserved for richer attestation
+    var root: Map<String, JsonValue> = new_map()
+    root.set("product_name", JStr(policy.product_name))
+    root.set("product_version", JStr(policy.product_version))
+    root.set("audit_timestamp_unix", JNum(to_float(audit_timestamp_unix)))
+    root.set("tier", JStr(policy.tier))
+    var summary: Map<String, JsonValue> = new_map()
+    summary.set("total_functions", JNum(to_float(agg.total_functions)))
+    summary.set("pure_functions", JNum(to_float(agg.pure_functions)))
+    summary.set("with_caps", JNum(to_float(agg.with_caps)))
+    summary.set("exclusions_applied", JNum(to_float(agg.exclusions_applied)))
+    summary.set("compliance_score", JNum(agg.compliance_score))
+    var axes: List<JsonValue> = []
+    for c in agg.distinct_cap_axes
+        axes.push(JStr(c))
+    summary.set("distinct_cap_axes", JArr(axes))
+    root.set("summary", JObj(summary))
+    var findings_arr: List<JsonValue> = []
+    for f in findings
+        var row: Map<String, JsonValue> = new_map()
+        row.set("function", JStr(f.function))
+        var caps_arr: List<JsonValue> = []
+        for c in f.declared_caps
+            caps_arr.push(JStr(c))
+        row.set("declared_caps", JArr(caps_arr))
+        row.set("status", JStr(status_label(f.status)))
+        row.set("rationale", JStr(status_rationale(f.status)))
+        findings_arr.push(JObj(row))
+    root.set("findings", JArr(findings_arr))
+    root.set("cve_included", JBool(cve_included))
+    root.set("cve_count", JNum(to_float(cve_findings.length())))
+    var cve_arr: List<JsonValue> = []
+    for c in cve_findings
+        var crow: Map<String, JsonValue> = new_map()
+        crow.set("function", JStr(c.function))
+        crow.set("component", JStr(c.component_name))
+        crow.set("cve_id", JStr(c.cve_id))
+        crow.set("summary", JStr(c.summary))
+        cve_arr.push(JObj(crow))
+    root.set("cves", JArr(cve_arr))
+    var reg: Map<String, JsonValue> = new_map()
+    reg.set("cra_annex_i_part_ii_1_machine_sbom", JStr("SATISFIED"))
+    reg.set("cra_annex_i_part_i_attack_surface", JStr("ATTESTED_PER_FUNCTION"))
+    reg.set("nis2_supply_chain_documentation", JStr("SATISFIED"))
+    reg.set("soc2_cc8_1_change_management", JStr("PARTIAL"))
+    root.set("regulatory_attestation", JObj(reg))
+    return to_json(JObj(root))

@@ -1,0 +1,10 @@
+# capa_governance_pack package manifest.
+#
+# Generates an EU CRA / NIS2 / SOC2 evidence pack from a
+# CycloneDX SBOM, a governance policy, and a VEX exclusions
+# list. Self-contained: no third-party Capa libraries.
+
+[package]
+name = "capa_governance_pack"
+version = "0.1.0"
+capa = ">=1.0.0rc3"

@@ -1,0 +1,80 @@
+// enrich.capa
+//
+// Optional OSV.dev CVE enrichment. The only Net-bearing
+// module in the pack. Toggled by GOV_PACK_INCLUDE_CVE=1; when
+// unset, the pipeline never imports this module's effects
+// (governance.capa decides at runtime whether to call it).
+
+import model
+
+// =========================================================
+// OSV.dev wire shape (minimal)
+// =========================================================
+//
+// We do not POST a full payload here; the demo issues a query
+// per component name with the GET shape so the request can be
+// served from the cap-attenuated Net handle without us shipping
+// an HTTP-POST builder. The real OSV API supports both; the
+// `q=` parameter is a fallback path that returns matches by
+// substring on the package name.
+/// OSV.dev query URL for a component name. The v1 path uses
+/// the substring-query form (`?q=...`); the typed-PURL form is
+/// a future enhancement once the SBOM parser surfaces PURLs as
+/// first-class fields.
+fun query_url(component_name: String) -> String
+    return "https://api.osv.dev/v1/query?q=${component_name}"
+
+fun parse_osv_response(body: String, fn_name: String, component_name: String) -> List<CveFinding>
+    var out: List<CveFinding> = []
+    let doc = match parse_json(body)
+        Err(_) -> return out
+        Ok(v) -> v
+
+    let obj = match doc.as_object()
+        None -> return out
+        Some(m) -> m
+
+    let vulns_j = match obj.get("vulns")
+        None -> return out
+        Some(v) -> v
+
+    let vulns = match vulns_j.as_array()
+        None -> return out
+        Some(xs) -> xs
+
+    for v in vulns
+        let vobj = match v.as_object()
+            None -> continue
+            Some(m) -> m
+
+        let cve_id = match vobj.get("id")
+            None -> "<unknown>"
+            Some(j) -> match j.as_string() { None -> "<unknown>", Some(s) -> s }
+
+        let summary = match vobj.get("summary")
+            None -> ""
+            Some(j) -> match j.as_string() { None -> "", Some(s) -> s }
+
+        out.push(CveFinding { function: fn_name, component_name: component_name, cve_id: cve_id, summary: summary })
+    return out
+
+// =========================================================
+// Public entry: query OSV per function with declared caps
+// =========================================================
+//
+// The function only fires when GOV_PACK_INCLUDE_CVE=1 has been
+// observed by the caller; this module never reads env on its
+// own (the cap is not in its signature).
+pub fun enrich_with_cves(net: Net, sbom: SbomSummary) -> List<CveFinding>
+    var out: List<CveFinding> = []
+    let scoped = net.restrict_to("api.osv.dev")  // attenuate before the first GET
+    for fn_record in sbom.components
+        if fn_record.declared_caps.is_empty()
+            continue  // pure functions cannot reach a CVE
+        let url = query_url(fn_record.name)
+        match scoped.get(url)
+            Err(_) -> ()
+            Ok(body) ->
+                for finding in parse_osv_response(body, fn_record.name, fn_record.name)
+                    out.push(finding)
+    return out

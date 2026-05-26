@@ -1,0 +1,206 @@
+// parse.capa
+//
+// Three JSON parsers, one per input shape:
+//   - parse_sbom:   CycloneDX 1.5 (Capa-emitted) -> SbomSummary
+//   - parse_policy: governance policy JSON       -> Policy
+//   - parse_vex:    VEX exclusions JSON          -> VexList
+//
+// Each declares [Fs] for the read; the rest is pure JSON
+// traversal.
+
+import model
+
+// =========================================================
+// Generic JsonValue extractors
+// =========================================================
+//
+// Same shape as the sbom_diff / sbom_capability_audit examples
+// in the main compiler repo: lift any non-conforming JsonValue
+// into a typed GovError so the `?` operator can chain.
+/// Typed extraction of a JsonValue as an object map. Used as
+/// the first step of every parser; lifts the "wrong shape"
+/// case into a GovError so the `?` operator can short-circuit
+/// the whole pipeline on a malformed input.
+fun as_object_or_err(j: JsonValue, what: String) -> Result<Map<String, JsonValue>, GovError>
+    return match j.as_object()
+        None -> Err(JsonError("expected object for ${what}"))
+        Some(m) -> Ok(m)
+
+fun as_array_or_err(j: JsonValue, what: String) -> Result<List<JsonValue>, GovError>
+    return match j.as_array()
+        None -> Err(JsonError("expected array for ${what}"))
+        Some(xs) -> Ok(xs)
+
+fun as_string_or_err(j: JsonValue, what: String) -> Result<String, GovError>
+    return match j.as_string()
+        None -> Err(JsonError("expected string for ${what}"))
+        Some(s) -> Ok(s)
+
+fun optional_field(j: JsonValue, name: String) -> Option<JsonValue>
+    return match j.as_object()
+        None -> None
+        Some(m) -> m.get(name)
+
+fun string_field_or(j: JsonValue, name: String, fallback: String) -> String
+    return match optional_field(j, name)
+        None -> fallback
+        Some(v) -> match v.as_string() { None -> fallback, Some(s) -> s }
+
+fun read_json(fs: Fs, path: String) -> Result<JsonValue, GovError>
+    let body = match fs.read(path)
+        Err(_) -> return Err(IoFailed("cannot read '${path}'"))
+        Ok(s) -> s
+
+    return match parse_json(body)
+        Err(e) -> Err(JsonError("'${path}': ${e}"))
+        Ok(v) -> Ok(v)
+
+// =========================================================
+// CycloneDX SBOM -> SbomSummary
+// =========================================================
+//
+// Pulls the components[] array, then for each component checks
+// the capa:kind property and, if it is "function", lifts the
+// declared_capability + return_type + is_pub properties.
+// Anything that is not a function-kind component is silently
+// skipped: the main caller's CycloneDX file may carry mixed
+// component types and only function rows are evidence.
+fun extract_first_property(props: List<JsonValue>, name: String) -> Result<Option<String>, GovError>
+    for p in props
+        let pobj = as_object_or_err(p, "property")?
+        let pname = match pobj.get("name")
+            None -> return Err(JsonError("property without 'name'"))
+            Some(v) -> as_string_or_err(v, "property.name")?
+
+        if pname == name
+            let pval = match pobj.get("value")
+                None -> return Err(JsonError("property '${name}' without 'value'"))
+                Some(v) -> as_string_or_err(v, "property.value")?
+
+            return Ok(Some(pval))
+    return Ok(None)
+
+fun extract_all_properties(props: List<JsonValue>, name: String) -> Result<List<String>, GovError>
+    var out: List<String> = []
+    for p in props
+        let pobj = as_object_or_err(p, "property")?
+        let pname = match pobj.get("name")
+            None -> continue
+            Some(v) -> as_string_or_err(v, "property.name")?
+
+        // tolerate malformed entry
+        if pname == name
+            let pval = match pobj.get("value")
+                None -> continue
+                Some(v) -> as_string_or_err(v, "property.value")?
+
+            out.push(pval)
+    return Ok(out)
+
+fun parse_function_component(j: JsonValue) -> Result<Option<FunctionEntry>, GovError>
+    let props_j = match optional_field(j, "properties")
+        None -> return Ok(None)
+        Some(v) -> v
+
+    let props = as_array_or_err(props_j, "component.properties")?
+    let kind = extract_first_property(props, "capa:kind")?
+    let is_fn = match kind
+        None -> false
+        Some(s) -> s == "function"
+
+    if not is_fn
+        return Ok(None)
+    let name = string_field_or(j, "name", "<anonymous>")
+    let caps = extract_all_properties(props, "capa:declared_capability")?
+    let return_type = match extract_first_property(props, "capa:return_type")?
+        None -> "Unit"
+        Some(s) -> s
+
+    let is_pub_str = match extract_first_property(props, "capa:is_pub")?
+        None -> "false"
+        Some(s) -> s
+
+    return Ok(Some(FunctionEntry { name: name, declared_caps: caps, is_pure: caps.is_empty(), return_type: return_type, is_pub: is_pub_str == "true" }))  // pure iff no declared caps
+
+pub fun parse_sbom(fs: Fs, path: String) -> Result<SbomSummary, GovError>
+    let root = read_json(fs, path)?
+    let obj = as_object_or_err(root, "sbom root")?
+    let fmt = string_field_or(root, "bomFormat", "")
+    if fmt != "CycloneDX"
+        return Err(BadSbom("expected bomFormat 'CycloneDX', got '${fmt}'"))
+    let spec = string_field_or(root, "specVersion", "?")
+    let product_name = match obj.get("metadata")
+        None -> "<unknown>"
+        Some(md) -> match optional_field(md, "component") { None -> "<unknown>", Some(c) -> string_field_or(c, "name", "<unknown>") }
+
+    var fns: List<FunctionEntry> = []
+    match obj.get("components")
+        None -> ()
+        Some(v) ->
+            let xs = as_array_or_err(v, "components")?
+            for x in xs
+                match parse_function_component(x)?
+                    None -> ()
+                    Some(fn_record) -> fns.push(fn_record)
+    return Ok(SbomSummary { product_name: product_name, spec_version: spec, components: fns })
+
+/* The policy + VEX parsers below have a simpler shape than the
+   SBOM parser: a fixed top-level schema with no properties[]
+   convention. They still use the same typed-extraction helpers
+   for uniform error messages. */
+// =========================================================
+// Policy JSON -> Policy
+// =========================================================
+fun parse_string_list(j: JsonValue, what: String) -> Result<List<String>, GovError>
+    let xs = as_array_or_err(j, what)?
+    var out: List<String> = []
+    for x in xs
+        out.push(as_string_or_err(x, "${what} entry")?)
+    return Ok(out)
+
+pub fun parse_policy(fs: Fs, path: String) -> Result<Policy, GovError>
+    let root = read_json(fs, path)?
+    let obj = as_object_or_err(root, "policy root")?
+    let name = string_field_or(root, "product_name", "")
+    let version = string_field_or(root, "product_version", "")
+    let tier = string_field_or(root, "tier", "L1")
+    let allowed = match obj.get("allowed_capability_surface")
+        None -> return Err(BadPolicy("missing 'allowed_capability_surface'"))
+        Some(v) -> parse_string_list(v, "allowed_capability_surface")?
+
+    var per_fn: Map<String, List<String>> = new_map()
+    match obj.get("per_function_allow")
+        None -> ()
+        Some(v) ->
+            let m = as_object_or_err(v, "per_function_allow")?
+            for key in m.keys()
+                match m.get(key)
+                    None -> ()
+                    Some(vals) ->
+                        let caps = parse_string_list(vals, "per_function_allow.${key}")?
+                        per_fn.set(key, caps)
+    return Ok(Policy { product_name: name, product_version: version, tier: tier, allowed_caps: allowed, per_function_allow: per_fn })
+
+// =========================================================
+// VEX JSON -> VexList
+// =========================================================
+pub fun parse_vex(fs: Fs, path: String) -> Result<VexList, GovError>
+    let root = read_json(fs, path)?
+    let obj = as_object_or_err(root, "vex root")?
+    var out: List<VexEntry> = []
+    match obj.get("exclusions")
+        None -> ()
+        Some(v) ->
+            let xs = as_array_or_err(v, "exclusions")?
+            for x in xs
+                let entry = as_object_or_err(x, "exclusion entry")?
+                let fn_name = match entry.get("function")
+                    None -> return Err(BadVex("exclusion missing 'function'"))
+                    Some(j) -> as_string_or_err(j, "exclusion.function")?
+
+                let rationale = match entry.get("rationale")
+                    None -> ""
+                    Some(j) -> as_string_or_err(j, "exclusion.rationale")?
+
+                out.push(VexEntry { function: fn_name, rationale: rationale })
+    return Ok(VexList { exclusions: out })

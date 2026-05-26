@@ -1,0 +1,103 @@
+// model.capa
+//
+// Shared domain types for the governance pack pipeline.
+// Zero capabilities; the vocabulary stays consistent across
+// the parser, the evaluator, the optional CVE enricher, and
+// the two renderers.
+// =========================================================
+// SBOM-side: per-function attribution
+// =========================================================
+/// A single function row lifted from a Capa-emitted CycloneDX
+/// SBOM. `declared_caps` is the raw `capa:declared_capability`
+/// property list as it appears in the SBOM; the evaluator does
+/// its own subset / overshoot arithmetic on this list. `is_pure`
+/// is computed at parse time: a function is pure iff it declares
+/// zero capabilities.
+pub type FunctionEntry {
+    name: String,
+    declared_caps: List<String>,
+    is_pure: Bool,
+    return_type: String,
+    is_pub: Bool
+}
+
+pub type SbomSummary {
+    product_name: String,
+    spec_version: String,
+    components: List<FunctionEntry>
+}
+
+// =========================================================
+// Policy-side: what the security team has signed off
+// =========================================================
+pub type Policy {
+    product_name: String,
+    product_version: String,
+    tier: String,
+    allowed_caps: List<String>,
+    per_function_allow: Map<String, List<String>>
+}
+
+// =========================================================
+// VEX-side: per-function exceptions with written rationale
+// =========================================================
+pub type VexEntry {
+    function: String,
+    rationale: String
+}
+
+pub type VexList {
+    exclusions: List<VexEntry>
+}
+
+// =========================================================
+// Findings + status
+// =========================================================
+//
+// FindingStatus is the four-valued classification produced by
+// evaluate.capa. Exhaustiveness is checked at compile time;
+// adding a fifth variant would force every renderer arm to
+// adapt.
+pub type FindingStatus =
+    Compliant
+    Widened(List<String>)
+    ExcludedByVex(String)
+    NotEvaluated(String)
+
+pub type Finding {
+    function: String,
+    declared_caps: List<String>,
+    status: FindingStatus
+}
+
+// =========================================================
+// Aggregate counters (pure data, computed by evaluate.capa)
+// =========================================================
+pub type Aggregate {
+    total_functions: Int,
+    pure_functions: Int,
+    with_caps: Int,
+    exclusions_applied: Int,
+    distinct_cap_axes: List<String>,
+    compliance_score: Float
+}
+
+// =========================================================
+// CVE enrichment (only populated when GOV_PACK_INCLUDE_CVE=1)
+// =========================================================
+pub type CveFinding {
+    function: String,
+    component_name: String,
+    cve_id: String,
+    summary: String
+}
+
+// =========================================================
+// Pipeline errors
+// =========================================================
+pub type GovError =
+    IoFailed(String)
+    JsonError(String)
+    BadSbom(String)
+    BadPolicy(String)
+    BadVex(String)

@@ -1,0 +1,8 @@
+{
+  "exclusions": [
+    {
+      "function": "fetch_remote_overrides",
+      "rationale": "Net required for feature-flag fetch; reviewed in change request #42"
+    }
+  ]
+}

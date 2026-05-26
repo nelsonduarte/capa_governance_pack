@@ -1,0 +1,151 @@
+// governance.capa
+//
+// Entry point. Reads three inputs (SBOM, policy, VEX),
+// classifies every function, optionally enriches with OSV.dev
+// CVE data, and writes two outputs:
+//   - audit_pack.md     (regulator-readable evidence pack)
+//   - attestation.json  (machine-readable, for GRC ingestion)
+//
+// Audit summary (capa --manifest governance.capa):
+//   main:               [Stdio, Fs, Env, Net, Clock]
+//   run_pipeline:       [Fs, Env, Net]
+//   parse_sbom,
+//   parse_policy,
+//   parse_vex:          [Fs]
+//   enrich_with_cves:   [Net]   (only called when env opts in)
+//   evaluate, render_*: pure
+
+import model
+
+import parse
+
+import evaluate
+
+import render
+
+import enrich
+
+// =========================================================
+// Tiny timestamp helper
+// =========================================================
+//
+// Capa's stdlib exposes Clock.now_secs() as a Float. We render
+// it as "unix-seconds; UTC offset zero" and also a short
+// Y-M-D HH:MM:SS string computed from epoch seconds. We avoid
+// leap-second + month-length arithmetic by using a deliberately
+// simplified formatter: the integer seconds and an ISO-ish
+// label sufficient for audit traceability. A v2 would call
+// out to capa_datetime once the package is wired.
+/// Formats a Unix-seconds integer as an ISO 8601 UTC string of
+/// the form `YYYY-MM-DDTHH:MM:SSZ`. Uses Hinnant's civil-from-
+/// days algorithm via `civil_from_days`, which is exact for the
+/// proleptic Gregorian calendar. No system zoneinfo is involved.
+fun seconds_to_iso(unix: Int) -> String
+    // Days since 1970-01-01.
+    let day_secs = 86400
+    let days = unix / day_secs
+    let rem = unix - days * day_secs
+    let hh = rem / 3600
+    let mm = (rem - hh * 3600) / 60
+    let ss = rem - hh * 3600 - mm * 60
+    let (y, m, d) = civil_from_days(days)
+    return "${y}-${pad2(m)}-${pad2(d)}T${pad2(hh)}:${pad2(mm)}:${pad2(ss)}Z"
+
+fun pad2(n: Int) -> String
+    if n < 10
+        return "0${n}"
+    return "${n}"
+
+// Howard Hinnant's civil_from_days algorithm. Returns the
+// (year, month, day) of the supplied epoch-day count. Exact
+// over the proleptic Gregorian calendar, which is what every
+// regulator means by "UTC date".
+fun civil_from_days(z: Int) -> (Int, Int, Int)
+    let shifted = z + 719468
+    let era = match shifted >= 0
+        true -> shifted / 146097
+        false -> (shifted - 146096) / 146097
+
+    let doe = shifted - era * 146097  // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    let y0 = yoe + era * 400
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    let mp = (5 * doy + 2) / 153
+    let d = doy - (153 * mp + 2) / 5 + 1
+    let m = match mp < 10
+        true -> mp + 3
+        false -> mp - 9
+
+    let y = match m <= 2
+        true -> y0 + 1
+        false -> y0
+
+    return (y, m, d)
+
+// =========================================================
+// Pipeline (does I/O, returns a Result for `?` propagation)
+// =========================================================
+fun run_pipeline(fs: Fs, env: Env, net: Net, sbom_path: String, policy_path: String, vex_path: String, audit_unix: Int) -> Result<(String, String, Int, Bool), GovError>
+    let sbom = parse_sbom(fs, sbom_path)?
+    let policy = parse_policy(fs, policy_path)?
+    let vex = parse_vex(fs, vex_path)?
+    let (findings, agg) = evaluate_all(sbom, policy, vex)
+    // CVE enrichment is opt-in. The env read is the only reason
+    // governance.capa carries Env; the Net cap is forwarded into
+    // enrich_with_cves only when the opt-in is set, so a default
+    // run is genuinely Net-free at the call-site granularity.
+    let include_cve = match env.get("GOV_PACK_INCLUDE_CVE")
+        Some(v) -> v == "1"
+        None -> false
+
+    let cve_findings = match include_cve
+        true -> enrich_with_cves(net, sbom)
+        false -> []
+
+    let iso = seconds_to_iso(audit_unix)
+    let md = render_audit_pack(policy, sbom, findings, agg, cve_findings, include_cve, vex, iso)
+    let json = render_attestation(policy, sbom, findings, agg, cve_findings, include_cve, audit_unix)
+    fs.write("audit_pack.md", md)?
+    fs.write("attestation.json", json)?
+    return Ok((iso, "audit_pack.md", findings.length(), include_cve))
+
+// =========================================================
+// Error reporting
+// =========================================================
+fun describe_error(stdio: Stdio, err: GovError) -> Unit
+    match err
+        IoFailed(msg) -> stdio.eprintln("io error: ${msg}")
+        JsonError(msg) -> stdio.eprintln("json error: ${msg}")
+        BadSbom(msg) -> stdio.eprintln("sbom error: ${msg}")
+        BadPolicy(msg) -> stdio.eprintln("policy error: ${msg}")
+        BadVex(msg) -> stdio.eprintln("vex error: ${msg}")
+
+// =========================================================
+// Entry point
+// =========================================================
+//
+// main acquires every cap explicitly. The `\u{1b}` escape in
+// the success line is the ANSI bold marker (CSI 1m / CSI 0m);
+// this validates that the Capa lexer accepts unicode escape
+// sequences. A regulator scraping the stdout still gets a
+// readable line because every modern terminal strips the
+// control bytes.
+fun main(stdio: Stdio, fs: Fs, env: Env, net: Net, clock: Clock)
+    let audit_unix = to_int(clock.now_secs())
+    let sbom_path = "data/sample_sbom.json"  // relative to cwd
+    let policy_path = "data/sample_policy.json"
+    let vex_path = "data/sample_vex.json"
+    match run_pipeline(fs, env, net, sbom_path, policy_path, vex_path, audit_unix)
+        Err(e) ->
+            describe_error(stdio, e)
+            stdio.eprintln("audit aborted; no outputs written")
+        Ok(result) ->
+            let (iso, md_path, finding_count, cve_on) = result
+            let cve_note = match cve_on
+                true -> "; CVE enrichment ON"
+                false -> "; CVE enrichment OFF (set GOV_PACK_INCLUDE_CVE=1)"
+
+            let bold = "\u{1b}[1m"
+            let reset = "\u{1b}[0m"
+            stdio.println("${bold}capa_governance_pack${reset}: wrote ${md_path} + attestation.json")
+            stdio.println("  ${finding_count} finding(s) @ ${iso}${cve_note}")

@@ -1,0 +1,10 @@
+{
+  "product_name": "example-product",
+  "product_version": "1.0.0",
+  "tier": "L1",
+  "allowed_capability_surface": ["Fs", "Env", "Stdio"],
+  "per_function_allow": {
+    "load_full_config": ["Fs", "Env", "Net"],
+    "main": ["Stdio", "Fs", "Env", "Net"]
+  }
+}

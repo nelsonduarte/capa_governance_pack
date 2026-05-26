@@ -1,0 +1,129 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:8b30d3a4-3f02-5fa1-b8b3-1a3c0d72e211",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-05-26T10:00:00Z",
+    "tools": {
+      "components": [
+        {"type": "application", "name": "capa", "version": "1.0.0rc3"}
+      ]
+    },
+    "component": {
+      "bom-ref": "capa:program:example_product",
+      "type": "application",
+      "name": "example-product",
+      "version": "1.0.0",
+      "supplier": {"name": "capa-build"},
+      "licenses": []
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "capa:fn:example-product:parse_config_text",
+      "type": "library",
+      "name": "parse_config_text",
+      "scope": "required",
+      "supplier": {"name": "capa-build"},
+      "licenses": [],
+      "properties": [
+        {"name": "capa:kind", "value": "function"},
+        {"name": "capa:return_type", "value": "Config"},
+        {"name": "capa:has_unsafe", "value": "false"},
+        {"name": "capa:is_pub", "value": "false"},
+        {"name": "capa:param", "value": "text: String"}
+      ]
+    },
+    {
+      "bom-ref": "capa:fn:example-product:validate_config",
+      "type": "library",
+      "name": "validate_config",
+      "scope": "required",
+      "supplier": {"name": "capa-build"},
+      "licenses": [],
+      "properties": [
+        {"name": "capa:kind", "value": "function"},
+        {"name": "capa:return_type", "value": "Result<Config, ValidationError>"},
+        {"name": "capa:has_unsafe", "value": "false"},
+        {"name": "capa:is_pub", "value": "true"},
+        {"name": "capa:param", "value": "c: Config"}
+      ]
+    },
+    {
+      "bom-ref": "capa:fn:example-product:load_full_config",
+      "type": "library",
+      "name": "load_full_config",
+      "scope": "required",
+      "supplier": {"name": "capa-build"},
+      "licenses": [],
+      "properties": [
+        {"name": "capa:kind", "value": "function"},
+        {"name": "capa:return_type", "value": "Result<Config, IoError>"},
+        {"name": "capa:has_unsafe", "value": "false"},
+        {"name": "capa:is_pub", "value": "true"},
+        {"name": "capa:declared_capability", "value": "Fs"},
+        {"name": "capa:declared_capability", "value": "Env"},
+        {"name": "capa:declared_capability", "value": "Net"},
+        {"name": "capa:param", "value": "fs: Fs [cap]"},
+        {"name": "capa:param", "value": "env: Env [cap]"},
+        {"name": "capa:param", "value": "net: Net [cap]"}
+      ]
+    },
+    {
+      "bom-ref": "capa:fn:example-product:fetch_remote_overrides",
+      "type": "library",
+      "name": "fetch_remote_overrides",
+      "scope": "required",
+      "supplier": {"name": "capa-build"},
+      "licenses": [],
+      "properties": [
+        {"name": "capa:kind", "value": "function"},
+        {"name": "capa:return_type", "value": "Result<List<Override>, IoError>"},
+        {"name": "capa:has_unsafe", "value": "false"},
+        {"name": "capa:is_pub", "value": "false"},
+        {"name": "capa:declared_capability", "value": "Net"},
+        {"name": "capa:param", "value": "net: Net [cap]"}
+      ]
+    },
+    {
+      "bom-ref": "capa:fn:example-product:write_audit_log",
+      "type": "library",
+      "name": "write_audit_log",
+      "scope": "required",
+      "supplier": {"name": "capa-build"},
+      "licenses": [],
+      "properties": [
+        {"name": "capa:kind", "value": "function"},
+        {"name": "capa:return_type", "value": "Result<Unit, IoError>"},
+        {"name": "capa:has_unsafe", "value": "false"},
+        {"name": "capa:is_pub", "value": "false"},
+        {"name": "capa:declared_capability", "value": "Fs"},
+        {"name": "capa:param", "value": "fs: Fs [cap]"},
+        {"name": "capa:param", "value": "entry: String"}
+      ]
+    },
+    {
+      "bom-ref": "capa:fn:example-product:main",
+      "type": "library",
+      "name": "main",
+      "scope": "required",
+      "supplier": {"name": "capa-build"},
+      "licenses": [],
+      "properties": [
+        {"name": "capa:kind", "value": "function"},
+        {"name": "capa:return_type", "value": "Unit"},
+        {"name": "capa:has_unsafe", "value": "false"},
+        {"name": "capa:is_pub", "value": "false"},
+        {"name": "capa:declared_capability", "value": "Stdio"},
+        {"name": "capa:declared_capability", "value": "Fs"},
+        {"name": "capa:declared_capability", "value": "Env"},
+        {"name": "capa:declared_capability", "value": "Net"},
+        {"name": "capa:param", "value": "stdio: Stdio [cap]"},
+        {"name": "capa:param", "value": "fs: Fs [cap]"},
+        {"name": "capa:param", "value": "env: Env [cap]"},
+        {"name": "capa:param", "value": "net: Net [cap]"}
+      ]
+    }
+  ]
+}

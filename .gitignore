@@ -1,0 +1,22 @@
+# Package manager: git deps materialised by `capa install`.
+vendor/
+
+# Generated evidence-pack outputs (written to cwd by default).
+audit_pack.md
+attestation.json
+
+# Manifest / audit dumps used while developing.
+_manifest.json
+manifest.json
+
+# Transpilation artefacts.
+_*.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp

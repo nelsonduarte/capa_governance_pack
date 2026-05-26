@@ -1,0 +1,150 @@
+// evaluate.capa
+//
+// Pure classification + aggregation. Takes the three parsed
+// inputs (SbomSummary, Policy, VexList) and produces a list of
+// Findings (one per function) plus an Aggregate counters
+// block.
+//
+// No I/O, no Net, no Clock. The evaluator is the half of the
+// pipeline that an auditor can re-derive from the same inputs
+// to verify the report. Replaying it on inputs A, B should
+// always yield the same findings, byte for byte.
+
+import model
+
+// =========================================================
+// Generic helpers
+// =========================================================
+/// Returns the first element of `xs`, or `default` if the list
+/// is empty. Generic over `T` so the same helper can serve a
+/// `List<String>` of cap names AND a `List<Finding>`; both
+/// shapes appear in the evaluator below. The generic shape is
+/// the simplest non-trivial way to surface a parametric helper
+/// in a code base whose data is mostly monomorphic.
+fun first<T>(xs: List<T>, default: T) -> T
+    return match xs.first()
+        None -> default
+        Some(v) -> v
+
+// Set-subtraction on List<String>: elements of a that are not
+// in b. Order-preserving so the renderer output is stable.
+fun set_difference(a: List<String>, b: List<String>) -> List<String>
+    var out: List<String> = []
+    for x in a
+        if not b.contains(x)
+            out.push(x)
+    return out
+
+fun unique(xs: List<String>) -> List<String>
+    var out: List<String> = []
+    for x in xs
+        if not out.contains(x)
+            out.push(x)
+    return out
+
+// =========================================================
+// Policy + VEX lookups
+// =========================================================
+fun lookup_per_function_allow(policy: Policy, fn_name: String) -> Option<List<String>>
+    return policy.per_function_allow.get(fn_name)
+
+fun vex_rationale_for(vex: VexList, fn_name: String) -> Option<String>
+    for entry in vex.exclusions
+        if entry.function == fn_name
+            return Some(entry.rationale)
+    return None
+
+// =========================================================
+// Per-function classification
+// =========================================================
+//
+// Resolution order, per function:
+//   1. Compute the allowed cap set: per_function_allow override
+//      if present, otherwise the aggregate allowed surface.
+//   2. Compute the widening = declared_caps - allowed.
+//   3. If widening is empty -> Compliant.
+//   4. Else if a VEX entry covers this function -> ExcludedByVex.
+//   5. Else if no per-function rule AND no VEX entry, AND the
+//      function declares caps, the function is reported as
+//      NotEvaluated (policy has not addressed it).
+//   6. Else -> Widened(widening).
+fun classify(fn_record: FunctionEntry, policy: Policy, vex: VexList) -> FindingStatus
+    let per_fn = lookup_per_function_allow(policy, fn_record.name)
+    let allowed = match per_fn
+        Some(xs) -> xs
+        None -> policy.allowed_caps
+
+    let widening = set_difference(fn_record.declared_caps, allowed)
+    if widening.is_empty()
+        return Compliant
+    // Nested match: the outer arm of "widening is non-empty"
+    // delegates to the VEX lookup, whose arms then decide.
+    return match vex_rationale_for(vex, fn_record.name)
+        Some(reason) -> ExcludedByVex(reason)
+        None ->
+            match per_fn
+                None -> NotEvaluated("function not addressed by policy or VEX")
+                Some(_) -> Widened(widening)
+
+pub fun evaluate(sbom: SbomSummary, policy: Policy, vex: VexList) -> List<Finding>
+    var findings: List<Finding> = []
+    for fn_record in sbom.components
+        if fn_record.name.is_empty()
+            continue  // defensive: drop unnamed entries
+        let status = classify(fn_record, policy, vex)
+        findings.push(Finding { function: fn_record.name, declared_caps: fn_record.declared_caps, status: status })
+    return findings
+
+// =========================================================
+// Aggregate counters
+// =========================================================
+pub fun aggregate(sbom: SbomSummary, findings: List<Finding>) -> Aggregate
+    let total = sbom.components.length()
+    // Lambda used as a List<T>.filter argument (the required
+    // shape item asks for one of these somewhere in the program).
+    let pure_fns = sbom.components.filter(fun (f: FunctionEntry) -> Bool => f.is_pure)
+    let with_caps = sbom.components.filter(fun (f: FunctionEntry) -> Bool => not f.is_pure)
+    var axes: List<String> = []
+    for fn_record in sbom.components
+        for c in fn_record.declared_caps
+            axes.push(c)
+    let distinct = unique(axes)
+    var ok_count = 0
+    var excl_count = 0
+    for f in findings
+        match f.status
+            Compliant ->
+                ok_count = ok_count + 1
+            ExcludedByVex(_) ->
+                excl_count = excl_count + 1
+            _ -> ()
+    // Float compliance score. Both Compliant and ExcludedByVex count as
+    // "policy-clean" because every exclusion is a written waiver.
+    let clean = ok_count + excl_count
+    let score = match total
+        0 -> 0.0
+        _ -> to_float(clean) / to_float(total) * 100.0
+
+    return Aggregate { total_functions: total, pure_functions: pure_fns.length(), with_caps: with_caps.length(), exclusions_applied: excl_count, distinct_cap_axes: distinct, compliance_score: score }
+
+// =========================================================
+// Convenience pair: (findings, aggregate) for the entry point
+// =========================================================
+pub fun evaluate_all(sbom: SbomSummary, policy: Policy, vex: VexList) -> (List<Finding>, Aggregate)
+    let findings = evaluate(sbom, policy, vex)
+    let agg = aggregate(sbom, findings)
+    return (findings, agg)
+
+// =========================================================
+// Pure-function percentage as an Int (validates Int/Int /)
+// =========================================================
+//
+// The renderer interpolates this as "${pct}%". Capa's recent
+// transpiler fix routes Int / Int through Python's `//`; before
+// the fix this would have produced a Float (and ${pct}% would
+// have rendered "37.5%" instead of "37%"). This call site is
+// the regression test.
+pub fun pure_percent(agg: Aggregate) -> Int
+    if agg.total_functions == 0
+        return 0
+    return agg.pure_functions * 100 / agg.total_functions
