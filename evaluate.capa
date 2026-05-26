@@ -98,7 +98,7 @@ pub fun evaluate(sbom: SbomSummary, policy: Policy, vex: VexList) -> List<Findin
 // =========================================================
 // Aggregate counters
 // =========================================================
-pub fun aggregate(sbom: SbomSummary, findings: List<Finding>) -> Aggregate
+pub fun aggregate(sbom: SbomSummary, policy: Policy, findings: List<Finding>) -> Aggregate
     let total = sbom.components.length()
     // Lambda used as a List<T>.filter argument (the required
     // shape item asks for one of these somewhere in the program).
@@ -118,12 +118,27 @@ pub fun aggregate(sbom: SbomSummary, findings: List<Finding>) -> Aggregate
             ExcludedByVex(_) ->
                 excl_count = excl_count + 1
             _ -> ()
-    // Float compliance score. Both Compliant and ExcludedByVex count as
-    // "policy-clean" because every exclusion is a written waiver.
+    // Per-function clean ratio. Both Compliant and ExcludedByVex
+    // count as "policy-clean" because every VEX exclusion is a
+    // written waiver.
     let clean = ok_count + excl_count
-    let score = match total
+    let per_fn_score = match total
         0 -> 0.0
         _ -> to_float(clean) / to_float(total) * 100.0
+    // Aggregate-surface overshoot penalty. A declared axis that
+    // falls outside `policy.allowed_caps` widens the product
+    // beyond the baseline surface; each such axis subtracts 10
+    // points. The VEX list explains WHY a function uses that
+    // axis but does not erase the widening at the product
+    // level - the auditor still needs to see the score drop so
+    // an unjustified widening is not silently 100/100.
+    var overshoot = 0
+    for axis in distinct
+        if not policy.allowed_caps.contains(axis)
+            overshoot = overshoot + 1
+    let penalty = to_float(overshoot) * 10.0
+    let raw = per_fn_score - penalty
+    let score = if raw < 0.0 then 0.0 else raw
 
     return Aggregate { total_functions: total, pure_functions: pure_fns.length(), with_caps: with_caps.length(), exclusions_applied: excl_count, distinct_cap_axes: distinct, compliance_score: score }
 
@@ -132,7 +147,7 @@ pub fun aggregate(sbom: SbomSummary, findings: List<Finding>) -> Aggregate
 // =========================================================
 pub fun evaluate_all(sbom: SbomSummary, policy: Policy, vex: VexList) -> (List<Finding>, Aggregate)
     let findings = evaluate(sbom, policy, vex)
-    let agg = aggregate(sbom, findings)
+    let agg = aggregate(sbom, policy, findings)
     return (findings, agg)
 
 // =========================================================
