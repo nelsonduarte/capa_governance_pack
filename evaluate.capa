@@ -15,6 +15,7 @@ import model
 // =========================================================
 // Generic helpers
 // =========================================================
+
 /// Returns the first element of `xs`, or `default` if the list
 /// is empty. Generic over `T` so the same helper can serve a
 /// `List<String>` of cap names AND a `List<Finding>`; both
@@ -125,6 +126,7 @@ pub fun aggregate(sbom: SbomSummary, policy: Policy, findings: List<Finding>) ->
     let per_fn_score = match total
         0 -> 0.0
         _ -> to_float(clean) / to_float(total) * 100.0
+
     // Aggregate-surface overshoot penalty. A declared axis that
     // falls outside `policy.allowed_caps` widens the product
     // beyond the baseline surface; each such axis subtracts 10
@@ -139,7 +141,6 @@ pub fun aggregate(sbom: SbomSummary, policy: Policy, findings: List<Finding>) ->
     let penalty = to_float(overshoot) * 10.0
     let raw = per_fn_score - penalty
     let score = if raw < 0.0 then 0.0 else raw
-
     return Aggregate { total_functions: total, pure_functions: pure_fns.length(), with_caps: with_caps.length(), exclusions_applied: excl_count, distinct_cap_axes: distinct, compliance_score: score }
 
 // =========================================================

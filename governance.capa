@@ -36,6 +36,7 @@ import enrich
 // simplified formatter: the integer seconds and an ISO-ish
 // label sufficient for audit traceability. A v2 would call
 // out to capa_datetime once the package is wired.
+
 /// Formats a Unix-seconds integer as an ISO 8601 UTC string of
 /// the form `YYYY-MM-DDTHH:MM:SSZ`. Uses Hinnant's civil-from-
 /// days algorithm via `civil_from_days`, which is exact for the

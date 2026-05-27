@@ -17,6 +17,7 @@ import model
 // Same shape as the sbom_diff / sbom_capability_audit examples
 // in the main compiler repo: lift any non-conforming JsonValue
 // into a typed GovError so the `?` operator can chain.
+
 /// Typed extraction of a JsonValue as an object map. Used as
 /// the first step of every parser; lifts the "wrong shape"
 /// case into a GovError so the `?` operator can short-circuit

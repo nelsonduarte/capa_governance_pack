@@ -17,6 +17,7 @@ import model
 // an HTTP-POST builder. The real OSV API supports both; the
 // `q=` parameter is a fallback path that returns matches by
 // substring on the package name.
+
 /// OSV.dev query URL for a component name. The v1 path uses
 /// the substring-query form (`?q=...`); the typed-PURL form is
 /// a future enhancement once the SBOM parser surfaces PURLs as
