@@ -1,9 +1,19 @@
+# Keep the GitHub Actions used by our workflows up to date.
+# This library is pure Capa with no pip/npm dependencies for Dependabot
+# to track, so only the github-actions ecosystem is configured.
+# Updates are monthly and grouped into a single PR per cycle to keep
+# the noise low on these stable peripheral repos.
+
 version: 2
 updates:
-  - package-ecosystem: "github-actions"
+  - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 1
     commit-message:
-      prefix: "deps"
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
