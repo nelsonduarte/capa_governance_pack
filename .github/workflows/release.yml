@@ -3,7 +3,7 @@ name: Release
 # Triggered by a signed v* tag push. Produces a source tarball,
 # generates a SLSA L2 build-provenance attestation through
 # Sigstore (keyless OIDC; published to the Rekor transparency
-# log via `actions/attest-build-provenance@v1`), and attaches
+# log via `actions/attest-build-provenance@v4`), and attaches
 # both to a new GitHub release.
 #
 # To verify a downloaded tarball on the consumer side:
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.ref }}
@@ -48,12 +48,12 @@ jobs:
           echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
 
       - name: Generate SLSA L2 provenance
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ steps.tarball.outputs.name }}
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ steps.tarball.outputs.name }}
           generate_release_notes: false
