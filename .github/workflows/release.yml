@@ -28,15 +28,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout tag
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           fetch-depth: 0
           ref: ${{ github.ref }}
 
-      - name: Verify tag is GPG-signed by publisher
+      - name: Verify tag is GPG-signed by the pinned publisher key
         run: |
+          set -euo pipefail
+          # Anchor on the pinned primary-key fingerprint. A merely
+          # "valid" signature is not enough: the tag must be signed by
+          # THIS publisher. Any deviation (no key, wrong key, unsigned
+          # tag, signature by a different key) fails the release.
+          PINNED=6C1D222D491FB88031E041A536CFB426101AA24B
+          if [ ! -f publisher.asc ]; then
+            echo "::error::publisher.asc is missing; cannot verify the tag signature."
+            exit 1
+          fi
           gpg --import publisher.asc
-          git verify-tag "${GITHUB_REF_NAME}"
+          if ! gpg --with-colons --fingerprint \
+               | grep -q "^fpr:::::::::${PINNED}:"; then
+            echo "::error::publisher.asc does not contain the pinned fingerprint ${PINNED}."
+            exit 1
+          fi
+          SIGNER=$(git verify-tag --raw "${GITHUB_REF_NAME}" 2>&1 \
+                   | awk '/^\[GNUPG:\] VALIDSIG/ { print $NF }')
+          if [ "${SIGNER}" != "${PINNED}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} is not signed by the pinned key (got '${SIGNER}', want '${PINNED}')."
+            exit 1
+          fi
+          echo "Tag ${GITHUB_REF_NAME} verified against pinned publisher key ${PINNED}."
 
       - name: Build source tarball
         id: tarball
@@ -48,12 +69,12 @@ jobs:
           echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
 
       - name: Generate SLSA L2 provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
         with:
           subject-path: ${{ steps.tarball.outputs.name }}
 
       - name: Publish release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
         with:
           files: ${{ steps.tarball.outputs.name }}
           generate_release_notes: false
