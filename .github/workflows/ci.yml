@@ -34,8 +34,8 @@ jobs:
       - name: Install Capa toolchain (pinned tag)
         run: |
           python -m pip install --upgrade pip
-          # capa-language v1.5.0
-          pip install "git+https://github.com/nelsonduarte/capa-language.git@0af79c0d55a56c78d9cc89129c9526c9cd7df5d6"
+          # capa-language v1.10.0
+          pip install "git+https://github.com/nelsonduarte/capa-language.git@505789a64d86535d2e9e0009f026c43fd79de106"
 
       - name: Type-check every module
         run: |

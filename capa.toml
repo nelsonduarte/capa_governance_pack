@@ -7,4 +7,4 @@
 [package]
 name = "capa_governance_pack"
 version = "0.1.0"
-capa = ">=1.0.0rc3"
+capa = ">=1.10.0"
