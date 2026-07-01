@@ -133,6 +133,34 @@ The `Net` capability is forwarded into `enrich_with_cves` only
 when the opt-in is set; a default run is provably Net-quiet at
 the call-site granularity.
 
+### WASI Preview 2 (not supported; honest limitation)
+
+This program does **not** run as a stock WASI Preview 2 component
+under `--wasi`, in either mode. The OSV.dev enrichment path
+(`enrich_with_cves`) issues a `Net.get` on a URL built by
+interpolation (`https://api.osv.dev/v1/query?q=${component_name}`),
+and `main` carries the `Net` capability unconditionally, forwarding
+it into the pipeline. In WASI mode the allowed-host ceiling can only
+be materialized from string-literal URLs, so the compiler rejects a
+dynamic URL at compile time and fails closed:
+
+```bash
+capa --wasm --component --wasi --run governance.capa
+# capa: --wasm: Net in WASI mode requires every URL passed to
+# get/post to be a string literal ... this program passes a dynamic
+# URL ... Use the default capa:host backend (drop --wasi).
+```
+
+This is a static decision: the Net-bearing enrichment call is
+present in the source regardless of the `GOV_PACK_INCLUDE_CVE`
+runtime gate, so even a default (CVE-off) invocation is refused
+under `--wasi`. Lifting a host ceiling for dynamically constructed
+URLs (an `--allow-host` escape hatch) is future work. Run this pack
+on the default `capa:host` backend (drop `--wasi`); the Fs-only
+governance demos [sbom-watch](https://github.com/nelsonduarte/sbom-watch)
+and [policy-eval](https://github.com/nelsonduarte/policy-eval) do run
+as stock WASI components.
+
 ## Output files
 
 `audit_pack.md` (first 10 lines, abridged):
